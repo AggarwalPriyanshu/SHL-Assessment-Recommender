@@ -29,15 +29,14 @@ for idx, item in enumerate(catalog):
     embedding = model.encode(text).tolist()
 
     collection.add(
-    ids=[str(idx)],
-    embeddings=[embedding],
-    documents=[text],
-    metadatas=[{
-        "name": item.get("name", ""),
-        "url": item.get("link", ""),
-        "test_type": ", ".join(item.get("keys", []))
-    }]
-
+        ids=[str(idx)],
+        embeddings=[embedding],
+        documents=[text],
+        metadatas=[{
+            "name": item.get("name", ""),
+            "url": item.get("link", ""),
+            "test_type": ", ".join(item.get("keys", []))
+        }]
     )
 
 print("Finished creating vector database!")

@@ -141,9 +141,28 @@ CATALOG = load_catalog()
 _CATALOG_URLS = {item.get("link", "") for item in CATALOG if item.get("link")}
 _CATALOG_BY_NAME = {item.get("name", ""): item for item in CATALOG}
  
+import subprocess
+import chromadb
+
 model = None
+
 client = chromadb.PersistentClient(path="chromadb_data")
-collection = client.get_collection("shl_assessments")
+
+try:
+    collection = client.get_collection("shl_assessments")
+    print("Loaded existing Chroma collection.")
+except Exception:
+    print("Collection not found. Creating it...")
+
+    subprocess.run(
+        ["python", "create_embeddings.py"],
+        check=True
+    )
+
+    client = chromadb.PersistentClient(path="chromadb_data")
+    collection = client.get_collection("shl_assessments")
+
+    print("Collection created successfully.")
  
  
 def is_irrelevant_item(item):
