@@ -141,7 +141,7 @@ CATALOG = load_catalog()
 _CATALOG_URLS = {item.get("link", "") for item in CATALOG if item.get("link")}
 _CATALOG_BY_NAME = {item.get("name", ""): item for item in CATALOG}
  
-model = SentenceTransformer("all-MiniLM-L6-v2")
+model = None
 client = chromadb.PersistentClient(path="chromadb_data")
 collection = client.get_collection("shl_assessments")
  
@@ -391,6 +391,10 @@ def search_catalog(state: ConversationState, query: str, top_k: int = 30):
  
  
 def semantic_search(query: str, top_k: int = 10):
+    global model
+
+    if model is None:
+        model = SentenceTransformer("all-MiniLM-L6-v2")
     embedding = model.encode(query).tolist()
     results = collection.query(query_embeddings=[embedding], n_results=top_k)
  
