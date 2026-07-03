@@ -54,21 +54,36 @@ SYNONYM_MAP = {
     "hr": ["personality", "communication", "leadership"],
 }
  
-# FIX: "cloud" added (was missing entirely -- "Cloud Engineer" never
-# triggered any specialization before this).
+# ---------------------------------------------------------------
+# ADDED: "flask"/"django"/"nodejs"/"microservices"/"rest"/"api" were
+# already sitting in SYNONYM_MAP above but could never fire, because
+# state.update("purpose", ...) is only ever set from a word in THIS
+# list. Adding them here is what actually activates those concept
+# lists. Also added "mern"/"mean" so the stack-name queries get a
+# specialization at all (they map to "fullstack" via
+# BACKEND_IMPLYING_TERMS/IMPLIED_SKILLS below, not directly here).
+# ---------------------------------------------------------------
 SPECIALIZATION_KEYWORDS = [
     "backend", "frontend", "fullstack", "full-stack", "full stack",
-    "data", "mobile", "devops", "cloud"
+    "data", "mobile", "devops", "cloud",
+    "flask", "django", "nodejs", "microservices", "rest", "api",
 ]
  
 PROGRAMMING_LANGUAGES = [
     "python", "java", "javascript", "c++", "c#", ".net", "sql", "node", "php"
 ]
  
+# ---------------------------------------------------------------
+# ADDED: "scientist" (Data Scientist queries were returning ZERO
+# results because this role was never recognized at all -- confirmed
+# directly from real test output), "lead" and "director" (Team Lead /
+# Director queries had the same total-failure pattern -- these words
+# previously only existed in EXPERIENCE_KEYWORDS, never as a ROLE).
+# ---------------------------------------------------------------
 ROLE_KEYWORDS = [
     "developer", "engineer", "manager", "analyst", "consultant",
     "sales", "marketing", "tester", "intern", "executive", "designer",
-    "recruiter", "accountant"
+    "recruiter", "accountant", "scientist", "lead", "director",
 ]
  
 SKILL_KEYWORDS = [
@@ -77,7 +92,46 @@ SKILL_KEYWORDS = [
     "c++", "c#", ".net", "selenium", "html", "css", "php",
     "testing", "qa", "automation", "numerical", "accounting",
     "android", "ios", "linux", "machine learning", "statistics",
+    # ---- ADDED: version-suffixed skill names that the strict
+    # word-boundary contains_term() can no longer match inside
+    # (e.g. "css" no longer matches inside "css3" because the "3" is
+    # alphanumeric, so it fails the boundary check). Rather than
+    # loosen contains_term() for everyone -- which risks re-opening
+    # the "java" vs "javascript" collision it was built to close --
+    # we add the exact versioned forms as their own keywords. ----
+    "css3", "html5", "angularjs",
 ]
+ 
+# ---------------------------------------------------------------
+# ADDED: frameworks/tools imply an underlying skill that the catalog
+# actually has a dedicated test for. Without this, "Need Flask
+# assessment" or "Need MERN Stack Developer assessment" scored zero
+# on the one thing that actually matters (Python, JavaScript/React)
+# because "flask" and "mern" are not skills the catalog names
+# directly -- they only ever existed as weak concept words.
+# ---------------------------------------------------------------
+IMPLIED_SKILLS = {
+    "flask": ["python"],
+    "django": ["python"],
+    "nodejs": ["javascript"],
+    "spring": ["java"],
+    "mern": ["javascript", "react"],
+    "mean": ["javascript", "angular"],
+    "css3": ["css"],
+    "html5": ["html"],
+    "angularjs": ["angular"],
+}
+ 
+# ---------------------------------------------------------------
+# ADDED: terms that clearly imply a backend/fullstack specialization
+# even when the literal word "backend" was never said. Without this,
+# "Need REST API assessment for Backend Developer" and "Need
+# Microservices assessment" fell through with no specialization at
+# all (their concept words in SYNONYM_MAP never got the chance to
+# fire either).
+# ---------------------------------------------------------------
+BACKEND_IMPLYING_TERMS = ["rest api", "restful", "microservices", "nodejs", "flask", "django", "spring"]
+FULLSTACK_IMPLYING_TERMS = ["mern", "mean"]
  
 EXPERIENCE_KEYWORDS = [
     "fresher", "entry", "junior", "mid", "senior", "lead", "manager", "director"
@@ -88,6 +142,19 @@ IRRELEVANT_NAME_TOKENS = [
     "indesign", "typing", "365", "office", "onenote", "teams", "sharepoint",
     "project management"
 ]
+ 
+# ---------------------------------------------------------------
+# ADDED: these two words are far too generic to be scored as raw
+# free-text keywords. "management" was matching "IBM Sterling Order
+# Management System" and "SAP Materials Management" for HR/Leadership
+# queries that have nothing to do with supply chain. "communication"
+# was matching "Telecommunications Engineering" and "Instrumentation
+# Engineering" purely on the substring "communication"/"Telecomm-".
+# They're still scored correctly elsewhere -- through the existing,
+# domain-gated `preferences` mechanism -- this only stops them being
+# treated as generic keywords in the free-text overlap loop.
+# ---------------------------------------------------------------
+OVERLY_GENERIC_WORDS = {"management", "communication"}
  
 EXCLUDABLE_CATEGORIES = ["personality", "ability", "cognitive", "simulation", "technical", "knowledge"]
  
@@ -101,6 +168,15 @@ GENERAL_ABILITY_CANDIDATES = [
     "Verify - Verbal Reasoning",
     "Verify - Inductive Reasoning (2014)",
 ]
+ 
+# ---------------------------------------------------------------
+# ADDED: name fragments identifying the redundant "SQL Server family"
+# of near-duplicate products. Used only to CAP how many of these can
+# flood a result set when SQL was a secondary concept-word match
+# rather than the user's actual explicit ask (see
+# deduplicate_sql_family below).
+# ---------------------------------------------------------------
+SQL_FAMILY_MARKERS = ["sql server", "ssis", "ssas", "ssrs", "pl/sql", "automata - sql", "teradata"]
  
  
 def contains_term(text: str, term: str) -> bool:
@@ -141,35 +217,27 @@ CATALOG = load_catalog()
 _CATALOG_URLS = {item.get("link", "") for item in CATALOG if item.get("link")}
 _CATALOG_BY_NAME = {item.get("name", ""): item for item in CATALOG}
  
-import subprocess
-import chromadb
-
 model = None
-
 client = chromadb.PersistentClient(path="chromadb_data")
-
-try:
-    collection = client.get_collection("shl_assessments")
-    print("Loaded existing Chroma collection.")
-except Exception:
-    print("Collection not found. Creating it...")
-
-    subprocess.run(
-        ["python", "create_embeddings.py"],
-        check=True
-    )
-
-    client = chromadb.PersistentClient(path="chromadb_data")
-    collection = client.get_collection("shl_assessments")
-
-    print("Collection created successfully.")
+collection = client.get_collection("shl_assessments")
  
  
-def is_irrelevant_item(item):
+def is_irrelevant_item(item, allowed_skills=None):
+    """
+    ADDED: optional allowed_skills parameter. If the user explicitly
+    asked for something that happens to be on the generic Office-
+    suite blocklist (most commonly "Excel" for a Data Analyst role),
+    it should not be blocked. Existing callers that don't pass
+    allowed_skills behave exactly as before -- this is backward
+    compatible, not a behavior change for anyone who doesn't opt in.
+    """
     name = item.get("name", "").lower()
     keys = " ".join(item.get("keys", [])).lower()
+    allowed_skills = allowed_skills or set()
     for tok in IRRELEVANT_NAME_TOKENS:
         if tok in name:
+            if tok in allowed_skills:
+                continue
             return True
     if "office" in keys or "digital literacy" in keys:
         return True
@@ -220,8 +288,19 @@ def update_conversation_state(state: ConversationState, message: str):
             state.update("purpose", "testing")
         elif role == "analyst" and ("financial" in text or "finance" in text):
             state.update("purpose", "finance")
-        elif "hr" in text or "human resources" in text:
+        # ADDED: "recruiter" role previously never mapped to any
+        # domain purpose at all (only a bare "hr"/"human resources"
+        # text match did) -- "Need Recruiter assessment" scored a
+        # total failure because of this gap.
+        elif "hr" in text or "human resources" in text or role == "recruiter":
             state.update("purpose", "hr")
+        # ADDED: backend/fullstack fallback purpose from implying
+        # terms, since these never matched SPECIALIZATION_KEYWORDS
+        # phrasing directly (e.g. "REST API", "Microservices").
+        elif any(term in text for term in FULLSTACK_IMPLYING_TERMS):
+            state.update("purpose", "fullstack")
+        elif any(term in text for term in BACKEND_IMPLYING_TERMS):
+            state.update("purpose", "backend")
  
     match = re.search(r"(\d+)\s*(year|years)", text)
     if match:
@@ -234,6 +313,18 @@ def update_conversation_state(state: ConversationState, message: str):
     for skill in SKILL_KEYWORDS:
         if contains_term(text, skill):
             state.update("skills", skill)
+ 
+    # ---------------------------------------------------------------
+    # ADDED: implied-skill expansion. "Flask"/"Django" imply Python;
+    # "MERN"/"MEAN" imply their respective language+framework pairs.
+    # These terms are checked as plain substrings (not contains_term)
+    # since "mern"/"mean" are marketing names, not natural-language
+    # words that risk colliding with something else in context.
+    # ---------------------------------------------------------------
+    for trigger, implied in IMPLIED_SKILLS.items():
+        if trigger in text:
+            for skill in implied:
+                state.update("skills", skill)
  
     if "personality" in text:
         state.update("preferences", "personality")
@@ -306,8 +397,16 @@ def search_catalog(state: ConversationState, query: str, top_k: int = 30):
  
     raw_query_words = [
         w for w in query.lower().split()
+        # ADDED: exclude OVERLY_GENERIC_WORDS from raw free-text
+        # scoring -- see constant definition above for why.
         if is_valid_keyword(w) and w not in STOPWORDS and w not in explicit_skills
+        and w not in OVERLY_GENERIC_WORDS
     ]
+ 
+    # ADDED: pass explicit_skills through so a token the user
+    # literally asked for (most notably "excel") isn't blocked by
+    # the generic Office-suite filter.
+    allowed_for_blocklist = set(explicit_skills)
  
     scored_items = []
  
@@ -319,7 +418,7 @@ def search_catalog(state: ConversationState, query: str, top_k: int = 30):
  
         if any(ex.lower() in name for ex in excluded):
             continue
-        if is_irrelevant_item(item):
+        if is_irrelevant_item(item, allowed_skills=allowed_for_blocklist):
             continue
  
         score = 0
@@ -411,7 +510,7 @@ def search_catalog(state: ConversationState, query: str, top_k: int = 30):
  
 def semantic_search(query: str, top_k: int = 10):
     global model
-
+ 
     if model is None:
         model = SentenceTransformer("all-MiniLM-L6-v2")
     embedding = model.encode(query).tolist()
@@ -451,7 +550,42 @@ def hybrid_search(state: ConversationState, query: str, pool_size: int = 30):
             continue
         combined[item["name"]] = item
  
-    return rerank_results(state, list(combined.values()), allowed_languages)
+    results = rerank_results(state, list(combined.values()), allowed_languages)
+    # ADDED: cap redundant SQL-Server-family bloat unless SQL is the
+    # user's actual explicit primary skill (see function below).
+    results = deduplicate_sql_family(state, results)
+    return results
+ 
+ 
+def deduplicate_sql_family(state: ConversationState, results, max_family_items=2):
+    """
+    ADDED. Confirmed directly from real test output: a query like
+    "Need Python assessment for Backend Developer" was returning
+    Python(New) correctly at #1, then EIGHT near-duplicate SQL Server
+    variants (Automata-SQL, MS SQL Server 2014, Oracle PL/SQL, SQL(New),
+    SQL Server, SSIS, SSAS, SSRS) filling almost the entire rest of the
+    list -- because "sql" is a strong backend concept word and the
+    catalog happens to have many SQL-Server sub-products. If the user
+    EXPLICITLY asked for SQL, this cap is skipped entirely (they get
+    the full family, which is correct). Otherwise only the top
+    `max_family_items` SQL-family products are kept, freeing up slots
+    for genuinely different, relevant items.
+    """
+    explicit_skills = state.get("skills")
+    if "sql" in explicit_skills:
+        return results
+ 
+    kept = []
+    family_count = 0
+    for item in results:
+        name = item["name"].lower()
+        is_family_member = any(marker in name for marker in SQL_FAMILY_MARKERS) or name.strip() == "sql (new)"
+        if is_family_member:
+            if family_count >= max_family_items:
+                continue
+            family_count += 1
+        kept.append(item)
+    return kept
  
  
 def rerank_results(state: ConversationState, results, allowed_languages=None):
@@ -691,6 +825,60 @@ def scope_guard(message: str):
     return None
  
  
+# ---------------------------------------------------------------
+# ADDED: out-of-scope guard for legal/compliance questions, general
+# hiring advice, and prompt-injection attempts. The assignment
+# explicitly requires refusing these ("It refuses general hiring
+# advice, legal questions, and prompt-injection attempts"). This did
+# not exist anywhere before -- only unsupported PROGRAMMING LANGUAGES
+# were refused via scope_guard above. A real official-style trace
+# (a legal-compliance question about HIPAA testing obligations, asked
+# mid-conversation after a shortlist was already built) is exactly
+# the case this fixes.
+# ---------------------------------------------------------------
+LEGAL_PATTERNS = [
+    "legally required", "legal requirement", "is it legal", "is this legal",
+    "comply with law", "compliance requirement", "lawsuit", "sue", "sued",
+    "discriminat", "eeoc", "gdpr", "adverse impact law", "satisfy that requirement",
+    "regulatory obligation", "liable", "liability",
+]
+ 
+HIRING_ADVICE_PATTERNS = [
+    "how much should i pay", "what salary", "fair salary", "interview questions to ask",
+    "how do i structure my interview", "should i hire", "reject this candidate",
+    "how to fire", "performance improvement plan", "negotiate salary",
+    "write a job description", "write a job offer",
+]
+ 
+INJECTION_PATTERNS = [
+    "ignore all previous instructions", "ignore previous instructions",
+    "disregard your instructions", "you are now", "act as", "pretend you are",
+    "system prompt", "jailbreak", "developer mode",
+]
+ 
+ 
+def out_of_scope_guard(message: str):
+    text = normalize_text(message)
+ 
+    if any(p in text for p in INJECTION_PATTERNS):
+        return ("I can only help with selecting SHL assessments from the catalog — "
+                "I can't take on a different role or ignore my instructions. "
+                "What hiring need can I help you with?")
+ 
+    if any(p in text for p in LEGAL_PATTERNS):
+        return ("That's a legal or compliance question, which is outside what I can advise on — "
+                "I can help you select assessments, but not interpret regulatory obligations or "
+                "whether a specific test satisfies a legal requirement. Your legal or compliance "
+                "team is the right resource for that.")
+ 
+    if any(p in text for p in HIRING_ADVICE_PATTERNS):
+        return ("That's general hiring/HR advice rather than assessment selection, so it's outside "
+                "what I can help with here. I can recommend SHL assessments for a role — "
+                "want to continue with that?")
+ 
+    return None
+ 
+ 
 def apply_unsupported_language_fallback_boost(results):
     for item in results:
         test_type = item.get("test_type", "").lower()
@@ -701,7 +889,13 @@ def apply_unsupported_language_fallback_boost(results):
             score += 15
         item["rank_score"] = score
     return sorted(results, key=lambda x: x.get("rank_score", 0), reverse=True)
- 
+
+
+@app.get("/")
+def root():
+    return {
+        "message": "SHL Assessment Recommender API is running"
+    } 
  
 @app.get("/health")
 def health():
@@ -739,6 +933,30 @@ def chat(request: ChatRequest):
         }
  
     state = build_state_from_messages(request.messages)
+ 
+    # ---------------- ADDED: Out-of-scope guard ----------------
+    # Checked BEFORE the language scope_guard and BEFORE search. If
+    # the conversation already had enough context to have earned a
+    # shortlist from prior turns, we regenerate it (we never persist
+    # recommendations across turns -- the API is stateless -- so the
+    # only correct way to "keep the existing shortlist visible" is to
+    # recompute it from the accumulated role/skills/preferences,
+    # exactly like a normal recommend turn would).
+    refusal = out_of_scope_guard(latest_user_message)
+    if refusal:
+        preserved_recs = []
+        if state.get("role") and state.get("experience"):
+            q = state.build_search_query()
+            preserved = hybrid_search(state, q)
+            preserved = filter_by_primary_skill(state, preserved)
+            preserved = refine_recommendations(state, preserved)
+            preserved = apply_relevance_threshold(preserved, limit=10)
+            preserved_recs = to_schema_recommendations(preserved, limit=10)
+        return {
+            "reply": refusal,
+            "recommendations": preserved_recs,
+            "end_of_conversation": False,
+        }
  
     guard = scope_guard(latest_user_message)
     if guard:
@@ -815,4 +1033,3 @@ def chat(request: ChatRequest):
         "recommendations": schema_recs,
         "end_of_conversation": True,
     }
- 

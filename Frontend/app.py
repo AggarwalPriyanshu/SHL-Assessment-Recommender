@@ -2,7 +2,7 @@ import streamlit as st
 import requests
 import pandas as pd
 
-BACKEND_URL = "http://127.0.0.1:8000/chat"
+BACKEND_URL = "https://shl-assessment-recommender-production-75df.up.railway.app/chat"
 
 st.set_page_config(
     page_title="SHL Assessment Recommender",
@@ -47,7 +47,7 @@ with st.sidebar:
         try:
 
             r = requests.get(
-                "http://127.0.0.1:8000/health"
+                "https://shl-assessment-recommender-production-75df.up.railway.app/health"
             )
 
             st.success(r.json()["status"])
