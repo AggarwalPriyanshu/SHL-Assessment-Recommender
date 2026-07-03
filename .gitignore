@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Virtual Environment
+venv/
+.env/
+
+# VS Code
+.vscode/
+
+# PyCharm
+.idea/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Logs
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Testing
+.pytest_cache/
+
+# Cache
+.cache/
+
+# Chroma
+chroma_db/
+
+# Build
+dist/
+build/
+
+# Git
+.git/
+
+venv/
+.env
+chromadb_data/
+__pycache__/
+*.pyc
