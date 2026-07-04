@@ -1020,11 +1020,39 @@ def chat(request: ChatRequest):
             "end_of_conversation": False,
         }
  
-    explanations = generate_explanations(query, recommendations)
+    """explanations = generate_explanations(query, recommendations)
     parsed = parse_explanations(explanations)
     for rec, reason in zip(recommendations, parsed):
-        rec["reason"] = reason
- 
+        rec["reason"] = reason"""
+    
+    for rec in recommendations:
+        rec["reason"] = "Recommended based on the provided hiring requirements."
+        
+        
+    print("STEP 1")
+    query = state.build_search_query()
+
+    print("STEP 2")
+    recommendations = hybrid_search(state, query)
+
+    print("STEP 3")
+    recommendations = filter_by_primary_skill(state, recommendations)
+
+    print("STEP 4")
+    recommendations = refine_recommendations(state, recommendations)
+
+    print("STEP 5")
+    recommendations = apply_relevance_threshold(recommendations, limit=10)
+
+    print("STEP 6")
+    recommendations = add_general_ability_companion(
+    state,
+    recommendations,
+    state.get("excluded_tests")
+    )
+
+    print("STEP 7")
+    
     reply = f"I found {len(recommendations)} assessments based on everything you've told me so far."
     schema_recs = to_schema_recommendations(recommendations, limit=10)
  
